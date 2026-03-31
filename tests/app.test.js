@@ -145,7 +145,26 @@ test("GET / includes app icon markup", async () => {
 
 test("parseTerraformBotConfig extracts bot fields from main.tf-style content", async () => {
   const { parseTerraformBotConfig } = await import("../public/tf-parser.js");
-  const tf = await readFile(path.resolve("main.tf"), "utf8");
+  const tf = `
+resource "oci_core_instance" "generated_oci_core_instance" {
+  availability_domain = "EXAMPLE-AD-1"
+  compartment_id = "ocid1.tenancy.oc1..exampleuniqueID"
+  create_vnic_details {
+    subnet_id = "ocid1.subnet.oc1.example-region-1.exampleuniqueID"
+  }
+  display_name = "example-instance"
+  metadata = {
+    "ssh_authorized_keys" = "ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABAQCsanitizedExamplePublicKeyOnly user@example"
+  }
+  shape_config {
+    memory_in_gbs = "12"
+    ocpus = "2"
+  }
+  source_details {
+    source_id = "ocid1.image.oc1.example-region-1.exampleuniqueID"
+    source_type = "image"
+  }
+}`;
 
   const parsed = parseTerraformBotConfig(tf);
 
