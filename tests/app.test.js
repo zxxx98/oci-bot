@@ -149,11 +149,11 @@ test("parseTerraformBotConfig extracts bot fields from main.tf-style content", a
 
   const parsed = parseTerraformBotConfig(tf);
 
-  assert.equal(parsed.compartmentId, "ocid1.tenancy.oc1..aaaaaaaaaf455u7fynhpyl3xfqccqv2yz3v43hwkntmorxignpsxhtm55kma");
-  assert.equal(parsed.availabilityDomain, "uEmW:AP-SINGAPORE-1-AD-1");
-  assert.equal(parsed.subnetId, "ocid1.subnet.oc1.ap-singapore-1.aaaaaaaap3nxz2d6mi2k624rngchgksgkiznowxr2coizg5zlapbgecinqlq");
-  assert.equal(parsed.imageId, "ocid1.image.oc1.ap-singapore-1.aaaaaaaafa5ym7zga7cbi5sgagpc6kkwjdsst3vccqxxi4bm7rrvgz4o7wba");
-  assert.equal(parsed.displayName, "instance-20260331-1547");
+  assert.equal(parsed.compartmentId, "ocid1.tenancy.oc1..exampleuniqueID");
+  assert.equal(parsed.availabilityDomain, "EXAMPLE-AD-1");
+  assert.equal(parsed.subnetId, "ocid1.subnet.oc1.example-region-1.exampleuniqueID");
+  assert.equal(parsed.imageId, "ocid1.image.oc1.example-region-1.exampleuniqueID");
+  assert.equal(parsed.displayName, "example-instance");
   assert.equal(parsed.ocpus, 2);
   assert.equal(parsed.memory, 12);
   assert.match(parsed.sshAuthorizedKeys, /^ssh-rsa /);
