@@ -60,6 +60,26 @@ docker compose logs -f
 docker compose down
 ```
 
+### 方法一补充：直接使用 GHCR 镜像
+
+如果仓库已经配置了 GitHub Actions，推送到 `main` 后会自动发布一个同时支持 `amd64` 和 `arm64` 的 `latest` 镜像到 GHCR。
+
+拉取命令：
+
+```bash
+docker pull ghcr.io/<github-owner>/oci-bot:latest
+```
+
+运行示例：
+
+```bash
+docker run -d \
+  -p 3000:3000 \
+  -v oci-bot-data:/app/data \
+  -v oci-bot-oci:/root/.oci \
+  ghcr.io/<github-owner>/oci-bot:latest
+```
+
 如果你希望连同持久化数据一起清掉，再执行：
 
 ```bash
