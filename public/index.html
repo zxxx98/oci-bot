@@ -1,0 +1,104 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Oracle ARM Bot</title>
+    <link rel="icon" href="/icon.svg" type="image/svg+xml" />
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <main class="page">
+      <section class="hero">
+        <div>
+          <p class="eyebrow">OCI ARM Capture Console</p>
+          <div class="hero-title">
+            <img id="heroIcon" class="hero-icon" src="/icon.svg" alt="Oracle ARM Bot icon" />
+            <h1>Oracle ARM 抢机控制台</h1>
+          </div>
+          <p class="lead">在一个容器里完成 OCI 凭据初始化、抢机参数配置、任务启动与日志观测。</p>
+        </div>
+        <div class="status-badge" id="statusBadge">Idle</div>
+      </section>
+
+      <section class="panel">
+        <h2>OCI 配置初始化</h2>
+        <details id="ociHelpDisclosure" class="help-disclosure">
+          <summary>OCI 初始配置从哪里获取</summary>
+          <div class="help-content">
+            <p>页面中的 OCI 初始化需要 `Tenancy OCID`、`User OCID`、`Fingerprint`、`Region` 和 `Private Key` 这 5 项。</p>
+            <ul class="help-list">
+              <li><strong>Tenancy OCID</strong>：在 OCI 控制台右上角头像菜单进入租户页面后查看。</li>
+              <li><strong>User OCID</strong>：在 `Identity & Security` -> `Users` -> 当前用户详情页中查看。</li>
+              <li><strong>Fingerprint</strong>：在当前用户的 `API Keys` 中上传公钥后获得。</li>
+              <li><strong>Region</strong>：填写你准备抢机的区域，例如 `ap-singapore-1`。</li>
+              <li><strong>Private Key</strong>：填写与你上传公钥配对的私钥内容。</li>
+            </ul>
+            <p>如果你还没有 API Key，可以先在本地生成：</p>
+            <pre class="help-code">openssl genrsa -out oci_api_key.pem 2048
+openssl rsa -pubout -in oci_api_key.pem -out oci_api_key_public.pem</pre>
+            <p>然后把公钥上传到 OCI 用户的 `API Keys`，再把私钥内容粘贴到页面里，最后点击“验证 OCI 配置”。</p>
+          </div>
+        </details>
+        <form id="ociForm" class="form-grid">
+          <label><span>Tenancy OCID</span><input name="tenancy" required /></label>
+          <label><span>User OCID</span><input name="user" required /></label>
+          <label><span>Fingerprint</span><input name="fingerprint" required /></label>
+          <label><span>Region</span><input name="region" value="ap-singapore-1" required /></label>
+          <label class="full"><span>Private Key</span><textarea name="privateKey" rows="8" required></textarea></label>
+          <div class="actions full">
+            <button type="submit">保存 OCI 配置</button>
+            <button type="button" id="validateOciBtn" class="secondary">验证 OCI 配置</button>
+          </div>
+        </form>
+      </section>
+
+      <section class="panel">
+        <h2>抢机任务配置</h2>
+        <div class="import-panel">
+          <div id="tfImportZone" class="import-zone" tabindex="0">
+            <strong>拖入 `main.tf` 自动解析</strong>
+            <span>支持拖放 `.tf` 文件，或点击这里选择文件，仅回填抢机任务字段。</span>
+          </div>
+          <input id="tfFileInput" type="file" accept=".tf,.hcl,text/plain" hidden />
+        </div>
+        <form id="botForm" class="form-grid">
+          <label><span>Subnet ID</span><input name="subnetId" required /></label>
+          <label><span>Compartment ID</span><input name="compartmentId" required /></label>
+          <label><span>Availability Domain</span><input name="availabilityDomain" required /></label>
+          <label><span>Image ID</span><input name="imageId" required /></label>
+          <label><span>Display Name</span><input name="displayName" /></label>
+          <label><span>OCPUs</span><input name="ocpus" type="number" min="1" value="2" required /></label>
+          <label><span>Memory (GB)</span><input name="memory" type="number" min="1" value="12" required /></label>
+          <label><span>Boot Volume (GB)</span><input name="bootVolumeSize" type="number" min="50" value="150" required /></label>
+          <label><span>Interval Seconds</span><input name="intervalSeconds" type="number" min="0" value="120" required /></label>
+          <label class="full"><span>SSH Authorized Keys</span><textarea name="sshAuthorizedKeys" rows="5" required></textarea></label>
+          <div class="actions full">
+            <button type="submit">保存抢机配置</button>
+            <button type="button" id="startBtn">启动任务</button>
+            <button type="button" id="stopBtn" class="secondary danger">停止任务</button>
+          </div>
+        </form>
+      </section>
+
+      <section class="panel split">
+        <div class="viewer-column">
+          <div class="viewer-head">
+            <h2>任务状态</h2>
+          </div>
+          <pre id="statusView" class="viewer">Loading...</pre>
+        </div>
+        <div class="viewer-column">
+          <div class="viewer-head">
+            <h2>运行日志</h2>
+            <div class="stream-indicator" id="logStreamStatus">日志连接初始化中</div>
+          </div>
+          <pre id="logsView" class="viewer">Loading...</pre>
+        </div>
+      </section>
+
+      <section class="toast" id="toast"></section>
+    </main>
+    <script src="/app.js" type="module"></script>
+  </body>
+</html>

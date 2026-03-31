@@ -1,0 +1,19 @@
+services:
+  oci-bot:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - "3000:3000"
+    environment:
+      PORT: 3000
+      DATA_DIR: /app/data
+      OCI_DIR: /root/.oci
+    volumes:
+      - oci-bot-data:/app/data
+      - oci-bot-oci:/root/.oci
+    restart: unless-stopped
+
+volumes:
+  oci-bot-data:
+  oci-bot-oci:

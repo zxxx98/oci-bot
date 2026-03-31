@@ -1,0 +1,12 @@
+{
+  "subnetId": "",
+  "compartmentId": "",
+  "availabilityDomain": "",
+  "imageId": "",
+  "displayName": "Oracle-ARM-Bot",
+  "sshAuthorizedKeys": "",
+  "ocpus": 2,
+  "memory": 12,
+  "bootVolumeSize": 150,
+  "intervalSeconds": 120
+}
