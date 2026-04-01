@@ -24,6 +24,8 @@ const DEFAULT_STATUS = {
   lastResult: "",
   lastError: "",
   active: false,
+  startedAt: null,
+  nextRetryAt: null,
 };
 
 function createJsonResponse(res, statusCode, payload) {
@@ -40,6 +42,14 @@ function createTextResponse(res, statusCode, payload, contentType = "text/plain;
     "cache-control": "no-store",
   });
   res.end(payload);
+}
+
+function createRedirectResponse(res, location) {
+  res.writeHead(302, {
+    location,
+    "cache-control": "no-store",
+  });
+  res.end();
 }
 
 async function readRequestBody(req) {
@@ -183,6 +193,46 @@ class OciConfigStore {
     return this.getMetadata();
   }
 
+  async getConfig() {
+    const metadata = await this.getMetadata();
+    if (!metadata.configured) {
+      return {
+        configured: false,
+        tenancy: "",
+        user: "",
+        fingerprint: "",
+        region: "",
+        privateKey: "",
+      };
+    }
+
+    const configText = await readFile(this.configPath, "utf8");
+    const privateKey = await readFile(this.keyPath, "utf8");
+    const values = {
+      configured: true,
+      tenancy: "",
+      user: "",
+      fingerprint: "",
+      region: "",
+      privateKey: privateKey.trim(),
+    };
+
+    for (const line of configText.split(/\r?\n/)) {
+      const [rawKey, ...rawValueParts] = line.split("=");
+      if (!rawKey || rawValueParts.length === 0) {
+        continue;
+      }
+
+      const key = rawKey.trim();
+      const value = rawValueParts.join("=").trim();
+      if (["tenancy", "user", "fingerprint", "region"].includes(key)) {
+        values[key] = value;
+      }
+    }
+
+    return values;
+  }
+
   async getMetadata() {
     const configured = await fileExists(this.configPath);
     return {
@@ -313,6 +363,7 @@ class BotJobRunner {
       }
     }
 
+    const startedAt = this.now().toISOString();
     this.abortRequested = false;
     this.running = true;
     await this.setStatus({
@@ -320,13 +371,15 @@ class BotJobRunner {
       message: "Job started",
       active: true,
       lastError: "",
+      startedAt,
+      nextRetryAt: null,
     });
     await this.logger.append("Bot job started.");
 
     this.currentPromise = this.runLoop().finally(async () => {
       this.running = false;
       if (this.abortRequested) {
-        await this.setStatus({ phase: "stopped", message: "Job stopped", active: false });
+        await this.setStatus({ phase: "stopped", message: "Job stopped", active: false, nextRetryAt: null });
         await this.logger.append("Bot job stopped.");
       }
     });
@@ -337,10 +390,10 @@ class BotJobRunner {
   async stop() {
     this.abortRequested = true;
     if (!this.running) {
-      await this.setStatus({ phase: "stopped", message: "Job stopped", active: false });
+      await this.setStatus({ phase: "stopped", message: "Job stopped", active: false, nextRetryAt: null });
       return { ok: true, active: false };
     }
-    await this.setStatus({ phase: "stopped", message: "Stopping", active: false });
+    await this.setStatus({ phase: "stopped", message: "Stopping", active: false, nextRetryAt: null });
     return { ok: true, active: false };
   }
 
@@ -357,6 +410,7 @@ class BotJobRunner {
         message: "Requesting ARM Instance",
         lastAttemptAt: timestamp,
         active: true,
+        nextRetryAt: null,
       });
       if (this.abortRequested) {
         return;
@@ -366,7 +420,14 @@ class BotJobRunner {
       const result = await this.commandRunner(
         "oci",
         this.buildLaunchArgs(config, publicKeyPath, shapeConfigPath),
-        { cwd: this.dataDir, env: process.env },
+        {
+          cwd: this.dataDir,
+          env: {
+            ...process.env,
+            OCI_CLI_SKIP_FILE_PERMISSIONS_CHECK: "True",
+            OCI_CLI_SUPPRESS_FILE_PERMISSIONS_WARNING: "True"
+          }
+        },
       );
 
       if (this.abortRequested) {
@@ -383,22 +444,24 @@ class BotJobRunner {
           lastResult: output,
           lastError: "",
           active: false,
+          nextRetryAt: null,
         });
         await this.logger.append(`SUCCESS: ${classified.message}`);
         return;
       }
 
       if (classified.phase === "waiting") {
+        const delayMs = Math.max(0, Number(config.intervalSeconds) * 1000 * classified.retryDelayMultiplier);
         await this.setStatus({
           phase: "waiting",
           message: classified.message,
           lastResult: output,
           lastError: "",
           active: true,
+          nextRetryAt: new Date(this.now().getTime() + delayMs).toISOString(),
         });
         const label = classified.message === "Out of Stock" ? "Out of Stock" : "Rate Limited";
         await this.logger.append(`${label}: ${output || classified.message}`);
-        const delayMs = Math.max(0, Number(config.intervalSeconds) * 1000 * classified.retryDelayMultiplier);
         await delay(delayMs, () => this.abortRequested);
         continue;
       }
@@ -409,6 +472,7 @@ class BotJobRunner {
         lastResult: output,
         lastError: output,
         active: false,
+        nextRetryAt: null,
       });
       await this.logger.append(`Unexpected Response: ${output || "No output"}`);
       return;
@@ -443,6 +507,22 @@ function getStaticContent(fileName) {
   return readFile(path.join(publicDir, fileName), "utf8");
 }
 
+function getContentType(fileName) {
+  const extension = path.extname(fileName).toLowerCase();
+  switch (extension) {
+    case ".html":
+      return "text/html; charset=utf-8";
+    case ".js":
+      return "application/javascript; charset=utf-8";
+    case ".css":
+      return "text/css; charset=utf-8";
+    case ".svg":
+      return "image/svg+xml; charset=utf-8";
+    default:
+      return "text/plain; charset=utf-8";
+  }
+}
+
 export function createApp({ dataDir = path.resolve(process.cwd(), "data"), ociDir = "/root/.oci", commandRunner = defaultCommandRunner, now = () => new Date() } = {}) {
   const configStore = new JsonFileStore(path.join(dataDir, "config.json"), DEFAULT_BOT_CONFIG);
   const statusStore = new JsonFileStore(path.join(dataDir, "job-state.json"), DEFAULT_STATUS);
@@ -464,28 +544,19 @@ export function createApp({ dataDir = path.resolve(process.cwd(), "data"), ociDi
 
     try {
       if (req.method === "GET" && url.pathname === "/") {
-        const html = await getStaticContent("index.html");
-        return createTextResponse(res, 200, html, "text/html; charset=utf-8");
+        return createRedirectResponse(res, "/monitor");
       }
 
-      if (req.method === "GET" && url.pathname === "/app.js") {
-        const js = await getStaticContent("app.js");
-        return createTextResponse(res, 200, js, "application/javascript; charset=utf-8");
+      if (req.method === "GET" && ["/monitor", "/config", "/logs"].includes(url.pathname)) {
+        const fileName = `${url.pathname.slice(1)}.html`;
+        const html = await getStaticContent(fileName);
+        return createTextResponse(res, 200, html, getContentType(fileName));
       }
 
-      if (req.method === "GET" && url.pathname === "/tf-parser.js") {
-        const js = await getStaticContent("tf-parser.js");
-        return createTextResponse(res, 200, js, "application/javascript; charset=utf-8");
-      }
-
-      if (req.method === "GET" && url.pathname === "/icon.svg") {
-        const svg = await getStaticContent("icon.svg");
-        return createTextResponse(res, 200, svg, "image/svg+xml; charset=utf-8");
-      }
-
-      if (req.method === "GET" && url.pathname === "/styles.css") {
-        const css = await getStaticContent("styles.css");
-        return createTextResponse(res, 200, css, "text/css; charset=utf-8");
+      if (req.method === "GET" && /^\/[\w.-]+\.(js|css|svg)$/.test(url.pathname)) {
+        const fileName = url.pathname.slice(1);
+        const content = await getStaticContent(fileName);
+        return createTextResponse(res, 200, content, getContentType(fileName));
       }
 
       if (req.method === "GET" && url.pathname === "/api/config") {
@@ -504,6 +575,11 @@ export function createApp({ dataDir = path.resolve(process.cwd(), "data"), ociDi
         const metadata = await ociConfigStore.save(body);
         await logger.append("OCI configuration saved.");
         return createJsonResponse(res, 200, { ok: true, oci: metadata });
+      }
+
+      if (req.method === "GET" && url.pathname === "/api/oci/config") {
+        const oci = await ociConfigStore.getConfig();
+        return createJsonResponse(res, 200, { oci });
       }
 
       if (req.method === "POST" && url.pathname === "/api/oci/validate") {

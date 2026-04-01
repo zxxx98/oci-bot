@@ -1,0 +1,90 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Oracle ARM 监控面板</title>
+    <link rel="icon" href="/icon.svg" type="image/svg+xml" />
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <main class="page">
+      <header class="hero">
+        <div>
+          <p class="eyebrow">OCI ARM Capture Console</p>
+          <div class="hero-title">
+            <img class="hero-icon" src="/icon.svg" alt="Oracle ARM Bot icon" />
+            <div>
+              <h1>Oracle ARM 监控面板</h1>
+              <p class="lead">用更清晰的状态视图掌握任务启停、重试节奏和最近一次执行结果。</p>
+            </div>
+          </div>
+        </div>
+        <div class="status-badge" id="statusBadge">IDLE</div>
+      </header>
+
+      <nav class="top-nav" aria-label="主导航">
+        <a data-nav-link href="/monitor">监控面板</a>
+        <a data-nav-link href="/config">配置面板</a>
+        <a data-nav-link href="/logs">日志面板</a>
+      </nav>
+
+      <section class="panel monitor-hero">
+        <div class="monitor-status">
+          <div class="status-indicator status-indicator-idle" id="statusIndicator" aria-hidden="true"></div>
+          <div>
+            <p class="metric-label">当前状态</p>
+            <h2 id="phaseTitle">待机中</h2>
+            <p class="section-note" id="phaseMessage">尚未开始任务，可以先检查配置后启动。</p>
+          </div>
+        </div>
+        <div class="monitor-actions">
+          <button type="button" id="actionBtn">开始任务</button>
+          <a class="ghost-link" href="/config">修改配置</a>
+          <a class="ghost-link" href="/logs">查看日志</a>
+        </div>
+      </section>
+
+      <section class="stats-grid">
+        <article class="panel metric-card metric-card-highlight">
+          <p class="metric-label">下一次重试倒计时</p>
+          <p class="metric-value" id="countdownValue">--</p>
+          <p class="metric-note" id="countdownNote">未计划重试</p>
+        </article>
+        <article class="panel metric-card">
+          <p class="metric-label">任务已运行</p>
+          <p class="metric-value" id="runtimeValue">--</p>
+          <p class="metric-note" id="runtimeNote">任务尚未启动</p>
+        </article>
+      </section>
+
+      <section class="stats-grid stats-grid-detail">
+        <article class="panel info-card">
+          <p class="metric-label">最近尝试时间</p>
+          <p class="info-value" id="lastAttemptValue">--</p>
+        </article>
+        <article class="panel info-card">
+          <p class="metric-label">最近结果</p>
+          <p class="info-value" id="lastResultValue">暂无结果</p>
+        </article>
+        <article class="panel info-card">
+          <p class="metric-label">最近错误</p>
+          <p class="info-value" id="lastErrorValue">暂无错误</p>
+        </article>
+      </section>
+
+      <section class="panel feedback-card feedback-card-neutral" id="feedbackCard">
+        <div class="viewer-head viewer-head-inline">
+          <div>
+            <h2 id="feedbackTitle">执行摘要</h2>
+            <p class="section-note" id="feedbackMessage">这里会对最新一次 OCI 返回做更容易读懂的解释。</p>
+          </div>
+        </div>
+        <pre id="feedbackRawView" class="viewer">暂无原始详情</pre>
+      </section>
+
+      <section class="toast" id="toast"></section>
+    </main>
+    <script src="/monitor.js" type="module"></script>
+  </body>
+</html>

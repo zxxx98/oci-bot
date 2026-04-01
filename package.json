@@ -5,7 +5,9 @@
   "type": "module",
   "scripts": {
     "start": "node src/server.js",
-    "test": "node tests/app.test.js"
+    "test": "node tests/app.test.js",
+    "prepare-commit": "powershell -ExecutionPolicy Bypass -File scripts/prepare-commit.ps1",
+    "setup-hooks": "powershell -ExecutionPolicy Bypass -File scripts/setup-hooks.ps1"
   }
 }
 

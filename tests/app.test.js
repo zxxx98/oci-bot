@@ -86,58 +86,84 @@ test("GET /api/config returns default bot configuration", async () => {
   }
 });
 
-test("GET / includes log stream status indicator", async () => {
+test("GET / redirects to /monitor", async () => {
   const ctx = await startTestServer();
 
   try {
-    const response = await fetch(`${ctx.baseUrl}/`);
-    const html = await response.text();
+    const response = await fetch(`${ctx.baseUrl}/`, { redirect: "manual" });
 
-    assert.equal(response.status, 200);
-    assert.match(html, /id="logStreamStatus"/);
+    assert.equal(response.status, 302);
+    assert.equal(response.headers.get("location"), "/monitor");
   } finally {
     await ctx.close();
   }
 });
 
-test("GET / includes Terraform import dropzone", async () => {
+test("GET /monitor includes monitor page status and logs entry points", async () => {
   const ctx = await startTestServer();
 
   try {
-    const response = await fetch(`${ctx.baseUrl}/`);
+    const response = await fetch(`${ctx.baseUrl}/monitor`);
     const html = await response.text();
 
     assert.equal(response.status, 200);
+    assert.match(html, /Oracle ARM 监控面板/);
+    assert.match(html, /id="actionBtn"/);
+    assert.match(html, /id="countdownValue"/);
+    assert.match(html, /id="runtimeValue"/);
+    assert.match(html, /id="statusIndicator"/);
+    assert.match(html, /id="feedbackCard"/);
+  } finally {
+    await ctx.close();
+  }
+});
+
+test("GET /config includes OCI setup and Terraform import sections", async () => {
+  const ctx = await startTestServer();
+
+  try {
+    const response = await fetch(`${ctx.baseUrl}/config`);
+    const html = await response.text();
+
+    assert.equal(response.status, 200);
+    assert.match(html, /id="ociForm"/);
     assert.match(html, /id="tfImportZone"/);
-  } finally {
-    await ctx.close();
-  }
-});
-
-test("GET / includes OCI setup help disclosure", async () => {
-  const ctx = await startTestServer();
-
-  try {
-    const response = await fetch(`${ctx.baseUrl}/`);
-    const html = await response.text();
-
-    assert.equal(response.status, 200);
     assert.match(html, /id="ociHelpDisclosure"/);
   } finally {
     await ctx.close();
   }
 });
 
-test("GET / includes app icon markup", async () => {
+test("GET /logs includes log stream indicator", async () => {
   const ctx = await startTestServer();
 
   try {
-    const response = await fetch(`${ctx.baseUrl}/`);
+    const response = await fetch(`${ctx.baseUrl}/logs`);
+    const html = await response.text();
+
+    assert.equal(response.status, 200);
+    assert.match(html, /id="logStreamStatus"/);
+    assert.match(html, /id="logsView"/);
+    assert.match(html, /id="logSummaryTitle"/);
+    assert.match(html, /id="logCountValue"/);
+    assert.match(html, /id="friendlyLogCard"/);
+  } finally {
+    await ctx.close();
+  }
+});
+
+test("split pages include shared navigation and icon markup", async () => {
+  const ctx = await startTestServer();
+
+  try {
+    const response = await fetch(`${ctx.baseUrl}/monitor`);
     const html = await response.text();
 
     assert.equal(response.status, 200);
     assert.match(html, /rel="icon" href="\/icon\.svg"/);
-    assert.match(html, /id="heroIcon"/);
+    assert.match(html, /href="\/monitor"/);
+    assert.match(html, /href="\/config"/);
+    assert.match(html, /href="\/logs"/);
   } finally {
     await ctx.close();
   }
@@ -180,6 +206,20 @@ resource "oci_core_instance" "generated_oci_core_instance" {
   assert.equal(parsed.intervalSeconds, undefined);
 });
 
+test("summarizeOciFeedback turns capacity errors into friendly guidance", async () => {
+  const { summarizeOciFeedback } = await import("../public/oci-feedback.js");
+  const summary = summarizeOciFeedback(`Out of Stock: ServiceError:
+{
+  "code": "InternalError",
+  "message": "Out of host capacity.",
+  "status": 500
+}`);
+
+  assert.equal(summary.level, "warning");
+  assert.match(summary.title, /区域容量暂时不足/);
+  assert.match(summary.message, /自动重试/);
+});
+
 test("POST /api/oci/config writes OCI config and private key", async () => {
   const ctx = await startTestServer();
 
@@ -208,6 +248,38 @@ test("POST /api/oci/config writes OCI config and private key", async () => {
     assert.match(configFile, /\[DEFAULT\]/);
     assert.match(configFile, /region=ap-singapore-1/);
     assert.match(keyFile, /BEGIN PRIVATE KEY/);
+  } finally {
+    await ctx.close();
+  }
+});
+
+test("GET /api/oci/config returns saved OCI form values for page reload", async () => {
+  const ctx = await startTestServer();
+
+  try {
+    const payload = {
+      tenancy: "ocid1.tenancy.oc1..example",
+      user: "ocid1.user.oc1..example",
+      fingerprint: "aa:bb:cc",
+      region: "ap-singapore-1",
+      privateKey: "-----BEGIN PRIVATE KEY-----\nabc\n-----END PRIVATE KEY-----",
+    };
+
+    await fetch(`${ctx.baseUrl}/api/oci/config`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+
+    const response = await fetch(`${ctx.baseUrl}/api/oci/config`);
+    const body = await response.json();
+
+    assert.equal(response.status, 200);
+    assert.equal(body.oci.tenancy, payload.tenancy);
+    assert.equal(body.oci.user, payload.user);
+    assert.equal(body.oci.fingerprint, payload.fingerprint);
+    assert.equal(body.oci.region, payload.region);
+    assert.match(body.oci.privateKey, /BEGIN PRIVATE KEY/);
   } finally {
     await ctx.close();
   }
@@ -287,6 +359,42 @@ test("job start retries on capacity and stops after success", async () => {
     assert.equal(statusBody.status.phase, "success");
     assert.equal(calls.length, 2);
     assert.match(statusBody.status.lastResult, /opc-work-request-id/);
+    assert.ok(statusBody.status.startedAt);
+    assert.equal(statusBody.status.nextRetryAt, null);
+  } finally {
+    await ctx.close();
+  }
+});
+
+test("waiting status includes startedAt and nextRetryAt for countdown UI", async () => {
+  const ctx = await startTestServer({
+    commandRunner: async () => ({ code: 1, stdout: "", stderr: "Out of capacity" }),
+  });
+
+  try {
+    await fetch(`${ctx.baseUrl}/api/config`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        subnetId: "subnet1",
+        compartmentId: "compartment1",
+        availabilityDomain: "AD-1",
+        imageId: "image1",
+        sshAuthorizedKeys: "ssh-rsa AAA test",
+        intervalSeconds: 2,
+      }),
+    });
+
+    await fetch(`${ctx.baseUrl}/api/job/start`, { method: "POST" });
+    await new Promise((resolve) => setTimeout(resolve, 60));
+
+    const statusResponse = await fetch(`${ctx.baseUrl}/api/job/status`);
+    const statusBody = await statusResponse.json();
+
+    assert.equal(statusBody.status.phase, "waiting");
+    assert.ok(statusBody.status.startedAt);
+    assert.ok(statusBody.status.nextRetryAt);
+    assert.ok(Date.parse(statusBody.status.nextRetryAt) >= Date.parse(statusBody.status.lastAttemptAt));
   } finally {
     await ctx.close();
   }

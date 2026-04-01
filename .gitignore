@@ -1,2 +1,8 @@
 oracle_arm_bot.ps1
 main.tf
+data/
+smoke-data/
+smoke-oci/
+*.pem
+*.key
+scripts/prepare-commit.mjs

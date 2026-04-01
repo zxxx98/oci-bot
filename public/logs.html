@@ -1,0 +1,84 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Oracle ARM 日志面板</title>
+    <link rel="icon" href="/icon.svg" type="image/svg+xml" />
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <main class="page">
+      <header class="hero">
+        <div>
+          <p class="eyebrow">OCI ARM Capture Console</p>
+          <div class="hero-title">
+            <img class="hero-icon" src="/icon.svg" alt="Oracle ARM Bot icon" />
+            <div>
+              <h1>Oracle ARM 日志面板</h1>
+              <p class="lead">专注查看日志流连接状态和实时输出，适合单独开页持续观察。</p>
+            </div>
+          </div>
+        </div>
+      </header>
+
+      <nav class="top-nav" aria-label="主导航">
+        <a data-nav-link href="/monitor">监控面板</a>
+        <a data-nav-link href="/config">配置面板</a>
+        <a data-nav-link href="/logs">日志面板</a>
+      </nav>
+
+      <section class="panel monitor-hero">
+        <div class="monitor-status">
+          <div class="status-indicator status-indicator-idle" id="statusIndicator" aria-hidden="true"></div>
+          <div>
+            <p class="metric-label">日志流状态</p>
+            <h2 id="logSummaryTitle">日志连接初始化中</h2>
+            <p class="section-note" id="logSummaryMessage">正在准备日志流与摘要统计。</p>
+          </div>
+        </div>
+        <div class="monitor-actions">
+          <div class="stream-indicator" id="logStreamStatus">日志连接初始化中</div>
+          <a class="ghost-link" href="/monitor">查看监控</a>
+        </div>
+      </section>
+
+      <section class="stats-grid stats-grid-detail">
+        <article class="panel info-card">
+          <p class="metric-label">日志总数</p>
+          <p class="info-value" id="logCountValue">0</p>
+        </article>
+        <article class="panel info-card">
+          <p class="metric-label">最后一条时间</p>
+          <p class="info-value" id="lastLogTimeValue">--</p>
+        </article>
+        <article class="panel info-card">
+          <p class="metric-label">当前模式</p>
+          <p class="info-value" id="logModeValue">初始化中</p>
+        </article>
+      </section>
+
+      <section class="panel feedback-card feedback-card-neutral" id="friendlyLogCard">
+        <div class="viewer-head viewer-head-inline">
+          <div>
+            <h2 id="friendlyLogTitle">最新事件摘要</h2>
+            <p class="section-note" id="friendlyLogMessage">这里会把最新一条关键日志翻译成更好理解的状态说明。</p>
+          </div>
+        </div>
+      </section>
+
+      <section class="panel">
+        <div class="viewer-head viewer-head-inline">
+          <div>
+            <h2>运行日志</h2>
+            <p class="section-note">实时日志保留深色阅读区，便于长时间盯盘。</p>
+          </div>
+        </div>
+        <pre id="logsView" class="viewer viewer-large">Loading...</pre>
+      </section>
+
+      <section class="toast" id="toast"></section>
+    </main>
+    <script src="/logs.js" type="module"></script>
+  </body>
+</html>
