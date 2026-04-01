@@ -1,9 +1,12 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdtemp, readFile } from "node:fs/promises";
+import { EventEmitter } from "node:events";
+import { mkdtemp, mkdir, readFile, writeFile } from "node:fs/promises";
+import { createConnection } from "node:net";
+import { PassThrough } from "node:stream";
 import os from "node:os";
 import path from "node:path";
-import { createApp } from "../src/app.js";
+import { appendBoundedOutput, createApp, createCommandRunner } from "../src/app.js";
 
 async function startTestServer(options = {}) {
   const tempDir = await mkdtemp(path.join(os.tmpdir(), "oci-bot-test-"));
@@ -13,6 +16,8 @@ async function startTestServer(options = {}) {
     commandRunner: options.commandRunner,
     notificationSender: options.notificationSender,
     now: options.now,
+    sseHeartbeatMs: options.sseHeartbeatMs,
+    sseClientTtlMs: options.sseClientTtlMs,
   });
 
   await app.ready;
@@ -474,8 +479,64 @@ test("POST /api/job/stop transitions a running job to stopped", async () => {
     const statusResponse = await fetch(`${ctx.baseUrl}/api/job/status`);
     const statusBody = await statusResponse.json();
     assert.equal(statusBody.status.phase, "stopped");
+    assert.equal(statusBody.status.active, false);
+    assert.ok(statusBody.status.endedAt);
+    assert.ok(Date.parse(statusBody.status.endedAt) >= Date.parse(statusBody.status.startedAt));
   } finally {
     await ctx.close();
+  }
+});
+
+test("app startup recovers persisted active job state left by an interrupted process", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "oci-bot-test-"));
+  const dataDir = path.join(tempDir, "data");
+  const now = new Date("2026-04-01T08:00:00.000Z");
+
+  await mkdir(dataDir, { recursive: true });
+
+  await writeFile(
+    path.join(dataDir, "job-state.json"),
+    `${JSON.stringify({
+      phase: "waiting",
+      message: "Out of Stock",
+      lastAttemptAt: "2026-04-01T07:59:00.000Z",
+      lastResult: "Out of capacity",
+      lastError: "",
+      active: true,
+      startedAt: "2026-04-01T07:30:00.000Z",
+      endedAt: null,
+      nextRetryAt: "2026-04-01T08:01:00.000Z",
+    }, null, 2)}\n`,
+    "utf8",
+  );
+
+  const app = createApp({
+    dataDir,
+    ociDir: path.join(tempDir, ".oci"),
+    now: () => now,
+  });
+
+  try {
+    await app.ready;
+
+    const server = app.server.listen(0);
+    await new Promise((resolve) => server.once("listening", resolve));
+    const address = server.address();
+    const response = await fetch(`http://127.0.0.1:${address.port}/api/job/status`);
+    const body = await response.json();
+
+    assert.equal(response.status, 200);
+    assert.equal(body.status.phase, "stopped");
+    assert.equal(body.status.active, false);
+    assert.equal(body.status.message, "Job interrupted by restart");
+    assert.equal(body.status.nextRetryAt, null);
+    assert.equal(body.status.endedAt, now.toISOString());
+
+    await new Promise((resolve, reject) => {
+      server.close((error) => (error ? reject(error) : resolve()));
+    });
+  } finally {
+    await app.shutdown();
   }
 });
 
@@ -599,6 +660,74 @@ test("GET /api/logs/stream replays history and streams new log lines", async () 
     assert.ok(messages.some((line) => line.includes("Requesting ARM Instance...")));
 
     await streamResponse.body.cancel();
+  } finally {
+    await ctx.close();
+  }
+});
+
+test("appendBoundedOutput truncates oversized child output", () => {
+  const stdout = appendBoundedOutput("", "a".repeat(20000), 4096);
+  const stderr = appendBoundedOutput("", "b".repeat(20000), 4096);
+
+  assert.ok(stdout.length <= 4096);
+  assert.ok(stderr.length <= 4096);
+  assert.match(stdout, /\[truncated\]$/);
+  assert.match(stderr, /\[truncated\]$/);
+});
+
+test("createCommandRunner terminates hung child processes after timeout", async () => {
+  const killSignals = [];
+  const runner = createCommandRunner(() => {
+    const child = new EventEmitter();
+    child.stdout = new PassThrough();
+    child.stderr = new PassThrough();
+    child.kill = (signal) => {
+      killSignals.push(signal);
+      if (signal === "SIGTERM") {
+        setTimeout(() => child.emit("close", null), 5);
+      }
+      return true;
+    };
+    return child;
+  });
+
+  const result = await runner("oci", ["fake"], {
+    timeoutMs: 50,
+    unrefTimers: false,
+  });
+
+  assert.notEqual(result.code, 0);
+  assert.match(result.stderr, /timed out/i);
+  assert.deepEqual(killSignals, ["SIGTERM"]);
+});
+
+test("GET /api/logs/stream expires long-lived subscribers", async () => {
+  const ctx = await startTestServer({
+    commandRunner: async () => ({ code: 1, stdout: "", stderr: "Out of capacity" }),
+    sseHeartbeatMs: 20,
+    sseClientTtlMs: 60,
+  });
+
+  try {
+    const socket = await new Promise((resolve, reject) => {
+      const client = createConnection({ host: "127.0.0.1", port: new URL(ctx.baseUrl).port }, () => resolve(client));
+      client.on("error", reject);
+    });
+    socket.write([
+      "GET /api/logs/stream HTTP/1.1",
+      `Host: 127.0.0.1:${new URL(ctx.baseUrl).port}`,
+      "Accept: text/event-stream",
+      "",
+      "",
+    ].join("\r\n"));
+
+    await new Promise((resolve) => setTimeout(resolve, 140));
+
+    const response = await fetch(`${ctx.baseUrl}/api/logs`);
+    const body = await response.json();
+
+    assert.equal(response.status, 200);
+    assert.equal(body.subscriberCount, 0);
   } finally {
     await ctx.close();
   }

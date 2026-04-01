@@ -140,7 +140,8 @@ function renderStatus(status) {
 
   const now = Date.now();
   const nextRetryMs = status.nextRetryAt ? Math.max(0, new Date(status.nextRetryAt).getTime() - now) : null;
-  const runtimeMs = status.startedAt ? Math.max(0, now - new Date(status.startedAt).getTime()) : null;
+  const runtimeEnd = isActivePhase(status.phase) ? now : status.endedAt ? new Date(status.endedAt).getTime() : now;
+  const runtimeMs = status.startedAt ? Math.max(0, runtimeEnd - new Date(status.startedAt).getTime()) : null;
 
   if (status.phase === "waiting" && nextRetryMs != null) {
     countdownValue.textContent = formatDuration(nextRetryMs);
@@ -158,7 +159,9 @@ function renderStatus(status) {
 
   if (runtimeMs != null) {
     runtimeValue.textContent = formatDuration(runtimeMs);
-    runtimeNote.textContent = `开始于 ${formatDateTime(status.startedAt)}`;
+    runtimeNote.textContent = isActivePhase(status.phase)
+      ? `开始于 ${formatDateTime(status.startedAt)}`
+      : `结束于 ${formatDateTime(status.endedAt)}`;
   } else {
     runtimeValue.textContent = "--";
     runtimeNote.textContent = "任务尚未启动";

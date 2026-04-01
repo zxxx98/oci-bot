@@ -1,3 +1,12 @@
 node_modules/
 data/
 Dockerfile*
+.git/
+.github/
+tests/
+scripts/
+smoke-data/
+smoke-oci/
+README.md
+main.tf
+oracle_arm_bot.ps1

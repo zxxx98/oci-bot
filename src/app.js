@@ -26,6 +26,7 @@ const DEFAULT_STATUS = {
   lastError: "",
   active: false,
   startedAt: null,
+  endedAt: null,
   nextRetryAt: null,
 };
 
@@ -144,6 +145,10 @@ class Logger {
     return [...this.lines];
   }
 
+  getSubscriberCount() {
+    return this.subscribers.size;
+  }
+
   subscribe(listener) {
     this.subscribers.add(listener);
     return () => {
@@ -154,6 +159,10 @@ class Logger {
 
 function writeSseMessage(res, data) {
   res.write(`data: ${String(data).replace(/\r?\n/g, "\ndata: ")}\n\n`);
+}
+
+function writeSseComment(res, comment) {
+  res.write(`: ${String(comment).replace(/\r?\n/g, " ")}\n\n`);
 }
 
 class OciConfigStore {
@@ -249,31 +258,78 @@ class OciConfigStore {
   }
 }
 
-function defaultCommandRunner(command, args, options = {}) {
-  return new Promise((resolve, reject) => {
-    const child = spawn(command, args, {
-      cwd: options.cwd,
-      env: options.env,
-      shell: false,
-    });
+export function appendBoundedOutput(current, chunk, maxOutputBytes) {
+  const next = `${current}${chunk.toString()}`;
+  if (!Number.isFinite(maxOutputBytes) || maxOutputBytes <= 0 || next.length <= maxOutputBytes) {
+    return next;
+  }
 
-    let stdout = "";
-    let stderr = "";
-
-    child.stdout.on("data", (chunk) => {
-      stdout += chunk.toString();
-    });
-
-    child.stderr.on("data", (chunk) => {
-      stderr += chunk.toString();
-    });
-
-    child.on("error", reject);
-    child.on("close", (code) => {
-      resolve({ code: code ?? 1, stdout, stderr });
-    });
-  });
+  const marker = "\n[truncated]";
+  const sliceLength = Math.max(0, maxOutputBytes - marker.length);
+  return `${next.slice(0, sliceLength)}${marker}`;
 }
+
+export function createCommandRunner(spawnImpl = spawn) {
+  return function commandRunner(command, args, options = {}) {
+    return new Promise((resolve, reject) => {
+      const maxOutputBytes = Number(options.maxOutputBytes ?? 64 * 1024);
+      const timeoutMs = Number(options.timeoutMs ?? 120000);
+      const unrefTimers = options.unrefTimers !== false;
+      const child = spawnImpl(command, args, {
+        cwd: options.cwd,
+        env: options.env,
+        shell: false,
+      });
+
+      let stdout = "";
+      let stderr = "";
+      let timedOut = false;
+
+      const killTimer = Number.isFinite(timeoutMs) && timeoutMs > 0
+        ? setTimeout(() => {
+            timedOut = true;
+            stderr = appendBoundedOutput(stderr, "\nProcess timed out and was terminated.", maxOutputBytes);
+            child.kill("SIGTERM");
+
+            const forceKillTimer = setTimeout(() => {
+              child.kill("SIGKILL");
+            }, 1000);
+
+            if (unrefTimers && forceKillTimer.unref) {
+              forceKillTimer.unref();
+            }
+          }, timeoutMs)
+        : null;
+
+      if (unrefTimers && killTimer?.unref) {
+        killTimer.unref();
+      }
+
+      child.stdout.on("data", (chunk) => {
+        stdout = appendBoundedOutput(stdout, chunk, maxOutputBytes);
+      });
+
+      child.stderr.on("data", (chunk) => {
+        stderr = appendBoundedOutput(stderr, chunk, maxOutputBytes);
+      });
+
+      child.on("error", (error) => {
+        if (killTimer) {
+          clearTimeout(killTimer);
+        }
+        reject(error);
+      });
+      child.on("close", (code) => {
+        if (killTimer) {
+          clearTimeout(killTimer);
+        }
+        resolve({ code: timedOut ? code ?? 124 : code ?? 1, stdout, stderr });
+      });
+    });
+  };
+}
+
+export const defaultCommandRunner = createCommandRunner(spawn);
 
 async function defaultNotificationSender({ webhookUrl, text }) {
   if (!webhookUrl) {
@@ -344,6 +400,21 @@ class BotJobRunner {
     const next = { ...this.statusStore.get(), ...patch };
     await this.statusStore.save(next);
     return next;
+  }
+
+  async reconcilePersistedState() {
+    const status = this.statusStore.get();
+    if (status.phase !== "running" && status.phase !== "waiting" && !status.active) {
+      return status;
+    }
+
+    return this.setStatus({
+      phase: "stopped",
+      message: "Job interrupted by restart",
+      active: false,
+      endedAt: this.now().toISOString(),
+      nextRetryAt: null,
+    });
   }
 
   async validateOci() {
@@ -426,6 +497,7 @@ class BotJobRunner {
       active: true,
       lastError: "",
       startedAt,
+      endedAt: null,
       nextRetryAt: null,
     });
     await this.logger.append("Bot job started.");
@@ -433,7 +505,13 @@ class BotJobRunner {
     this.currentPromise = this.runLoop().finally(async () => {
       this.running = false;
       if (this.abortRequested) {
-        await this.setStatus({ phase: "stopped", message: "Job stopped", active: false, nextRetryAt: null });
+        await this.setStatus({
+          phase: "stopped",
+          message: "Job stopped",
+          active: false,
+          endedAt: this.now().toISOString(),
+          nextRetryAt: null,
+        });
         await this.logger.append("Bot job stopped.");
       }
     });
@@ -444,10 +522,22 @@ class BotJobRunner {
   async stop() {
     this.abortRequested = true;
     if (!this.running) {
-      await this.setStatus({ phase: "stopped", message: "Job stopped", active: false, nextRetryAt: null });
+      await this.setStatus({
+        phase: "stopped",
+        message: "Job stopped",
+        active: false,
+        endedAt: this.now().toISOString(),
+        nextRetryAt: null,
+      });
       return { ok: true, active: false };
     }
-    await this.setStatus({ phase: "stopped", message: "Stopping", active: false, nextRetryAt: null });
+    await this.setStatus({
+      phase: "stopped",
+      message: "Stopping",
+      active: false,
+      endedAt: this.now().toISOString(),
+      nextRetryAt: null,
+    });
     return { ok: true, active: false };
   }
 
@@ -498,6 +588,7 @@ class BotJobRunner {
           lastResult: output,
           lastError: "",
           active: false,
+          endedAt: this.now().toISOString(),
           nextRetryAt: null,
         });
         await this.logger.append(`SUCCESS: ${classified.message}`);
@@ -512,14 +603,15 @@ class BotJobRunner {
 
       if (classified.phase === "waiting") {
         const delayMs = Math.max(0, Number(config.intervalSeconds) * 1000 * classified.retryDelayMultiplier);
-        await this.setStatus({
-          phase: "waiting",
-          message: classified.message,
-          lastResult: output,
-          lastError: "",
-          active: true,
-          nextRetryAt: new Date(this.now().getTime() + delayMs).toISOString(),
-        });
+      await this.setStatus({
+        phase: "waiting",
+        message: classified.message,
+        lastResult: output,
+        lastError: "",
+        active: true,
+        endedAt: null,
+        nextRetryAt: new Date(this.now().getTime() + delayMs).toISOString(),
+      });
         const label = classified.message === "Out of Stock" ? "Out of Stock" : "Rate Limited";
         await this.logger.append(`${label}: ${output || classified.message}`);
         await delay(delayMs, () => this.abortRequested);
@@ -532,6 +624,7 @@ class BotJobRunner {
         lastResult: output,
         lastError: output,
         active: false,
+        endedAt: this.now().toISOString(),
         nextRetryAt: null,
       });
       await this.logger.append(`Unexpected Response: ${output || "No output"}`);
@@ -583,7 +676,15 @@ function getContentType(fileName) {
   }
 }
 
-export function createApp({ dataDir = path.resolve(process.cwd(), "data"), ociDir = "/root/.oci", commandRunner = defaultCommandRunner, notificationSender = defaultNotificationSender, now = () => new Date() } = {}) {
+export function createApp({
+  dataDir = path.resolve(process.cwd(), "data"),
+  ociDir = "/root/.oci",
+  commandRunner = defaultCommandRunner,
+  notificationSender = defaultNotificationSender,
+  now = () => new Date(),
+  sseHeartbeatMs = 15000,
+  sseClientTtlMs = 15 * 60 * 1000,
+} = {}) {
   const configStore = new JsonFileStore(path.join(dataDir, "config.json"), DEFAULT_BOT_CONFIG);
   const statusStore = new JsonFileStore(path.join(dataDir, "job-state.json"), DEFAULT_STATUS);
   const logger = new Logger(path.join(dataDir, "logs", "app.log"), now);
@@ -595,7 +696,7 @@ export function createApp({ dataDir = path.resolve(process.cwd(), "data"), ociDi
     statusStore.init(),
     logger.init(),
     ociConfigStore.init(),
-  ]);
+  ]).then(() => jobRunner.reconcilePersistedState());
 
   const server = http.createServer(async (req, res) => {
     await ready;
@@ -686,7 +787,7 @@ export function createApp({ dataDir = path.resolve(process.cwd(), "data"), ociDi
       }
 
       if (req.method === "GET" && url.pathname === "/api/logs") {
-        return createJsonResponse(res, 200, { logs: logger.getLines() });
+        return createJsonResponse(res, 200, { logs: logger.getLines(), subscriberCount: logger.getSubscriberCount() });
       }
 
       if (req.method === "POST" && url.pathname === "/api/logs/clear") {
@@ -702,20 +803,81 @@ export function createApp({ dataDir = path.resolve(process.cwd(), "data"), ociDi
           "x-accel-buffering": "no",
         });
 
-        for (const line of logger.getLines()) {
-          writeSseMessage(res, line);
-        }
-
-        const unsubscribe = logger.subscribe((line) => {
-          writeSseMessage(res, line);
-        });
+        let closed = false;
+        let unsubscribe = () => {};
+        let heartbeatTimer = null;
+        let ttlTimer = null;
 
         const cleanup = () => {
+          if (closed) {
+            return;
+          }
+
+          closed = true;
           unsubscribe();
+
+          if (heartbeatTimer) {
+            clearInterval(heartbeatTimer);
+          }
+
+          if (ttlTimer) {
+            clearTimeout(ttlTimer);
+          }
+
+          if (!res.writableEnded) {
+            res.end();
+          }
         };
+
+        const safeWrite = (writer) => {
+          if (closed || req.destroyed || res.destroyed || res.writableEnded) {
+            cleanup();
+            return false;
+          }
+
+          try {
+            writer();
+            return true;
+          } catch {
+            cleanup();
+            return false;
+          }
+        };
+
+        for (const line of logger.getLines()) {
+          if (!safeWrite(() => writeSseMessage(res, line))) {
+            return;
+          }
+        }
+
+        unsubscribe = logger.subscribe((line) => {
+          safeWrite(() => writeSseMessage(res, line));
+        });
+
+        if (Number.isFinite(sseHeartbeatMs) && sseHeartbeatMs > 0) {
+          heartbeatTimer = setInterval(() => {
+            safeWrite(() => writeSseComment(res, "keepalive"));
+          }, sseHeartbeatMs);
+
+          if (heartbeatTimer.unref) {
+            heartbeatTimer.unref();
+          }
+        }
+
+        if (Number.isFinite(sseClientTtlMs) && sseClientTtlMs > 0) {
+          ttlTimer = setTimeout(() => {
+            cleanup();
+          }, sseClientTtlMs);
+
+          if (ttlTimer.unref) {
+            ttlTimer.unref();
+          }
+        }
 
         req.on("close", cleanup);
         res.on("close", cleanup);
+        req.on("error", cleanup);
+        res.on("error", cleanup);
         return;
       }
 
