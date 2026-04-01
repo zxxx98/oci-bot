@@ -11,6 +11,7 @@ async function startTestServer(options = {}) {
     dataDir: path.join(tempDir, "data"),
     ociDir: path.join(tempDir, ".oci"),
     commandRunner: options.commandRunner,
+    notificationSender: options.notificationSender,
     now: options.now,
   });
 
@@ -81,6 +82,7 @@ test("GET /api/config returns default bot configuration", async () => {
     assert.equal(response.status, 200);
     assert.equal(body.config.displayName, "Oracle-ARM-Bot");
     assert.equal(body.config.intervalSeconds, 120);
+    assert.equal(body.config.feishuWebhookUrl, "");
   } finally {
     await ctx.close();
   }
@@ -129,6 +131,8 @@ test("GET /config includes OCI setup and Terraform import sections", async () =>
     assert.match(html, /id="ociForm"/);
     assert.match(html, /id="tfImportZone"/);
     assert.match(html, /id="ociHelpDisclosure"/);
+    assert.match(html, /name="feishuWebhookUrl"/);
+    assert.match(html, /id="testFeishuBtn"/);
   } finally {
     await ctx.close();
   }
@@ -147,6 +151,7 @@ test("GET /logs includes log stream indicator", async () => {
     assert.match(html, /id="logSummaryTitle"/);
     assert.match(html, /id="logCountValue"/);
     assert.match(html, /id="friendlyLogCard"/);
+    assert.match(html, /id="clearLogsBtn"/);
   } finally {
     await ctx.close();
   }
@@ -319,14 +324,46 @@ test("POST /api/oci/validate returns command output when OCI config is valid", a
   }
 });
 
+test("POST /api/notify/feishu/test sends a test notification", async () => {
+  const notifications = [];
+  const ctx = await startTestServer({
+    notificationSender: async (payload) => {
+      notifications.push(payload);
+    },
+  });
+
+  try {
+    const response = await fetch(`${ctx.baseUrl}/api/notify/feishu/test`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        webhookUrl: "https://open.feishu.cn/mock/webhook",
+      }),
+    });
+    const body = await response.json();
+
+    assert.equal(response.status, 200);
+    assert.equal(body.ok, true);
+    assert.equal(notifications.length, 1);
+    assert.equal(notifications[0].webhookUrl, "https://open.feishu.cn/mock/webhook");
+    assert.match(notifications[0].text, /测试通知/);
+  } finally {
+    await ctx.close();
+  }
+});
+
 test("job start retries on capacity and stops after success", async () => {
   const calls = [];
+  const notifications = [];
   const responses = [
     { code: 1, stdout: "", stderr: "Out of capacity" },
     { code: 0, stdout: '{"opc-work-request-id":"wr1","lifecycle-state":"PROVISIONING"}', stderr: "" },
   ];
 
   const ctx = await startTestServer({
+    notificationSender: async (payload) => {
+      notifications.push(payload);
+    },
     commandRunner: async (command, args) => {
       calls.push([command, ...args]);
       return responses.shift() ?? { code: 1, stdout: "", stderr: "unexpected" };
@@ -344,6 +381,7 @@ test("job start retries on capacity and stops after success", async () => {
         imageId: "image1",
         sshAuthorizedKeys: "ssh-rsa AAA test",
         intervalSeconds: 0,
+        feishuWebhookUrl: "https://open.feishu.cn/mock/webhook",
       }),
     });
     assert.equal(saveConfigResponse.status, 200);
@@ -361,6 +399,8 @@ test("job start retries on capacity and stops after success", async () => {
     assert.match(statusBody.status.lastResult, /opc-work-request-id/);
     assert.ok(statusBody.status.startedAt);
     assert.equal(statusBody.status.nextRetryAt, null);
+    assert.equal(notifications.length, 1);
+    assert.match(JSON.stringify(notifications[0]), /Oracle-ARM-Bot/);
   } finally {
     await ctx.close();
   }
@@ -467,6 +507,53 @@ test("GET /api/logs returns accumulated log lines", async () => {
     assert.equal(response.status, 200);
     assert.ok(Array.isArray(body.logs));
     assert.ok(body.logs.some((line) => line.includes("Out of Stock") || line.includes("Requesting ARM Instance")));
+  } finally {
+    await ctx.close();
+  }
+});
+
+test("logger keeps only the latest 100 lines", async () => {
+  const ctx = await startTestServer();
+
+  try {
+    for (let index = 0; index < 120; index += 1) {
+      await fetch(`${ctx.baseUrl}/api/config`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ displayName: `run-${index}` }),
+      });
+    }
+
+    const response = await fetch(`${ctx.baseUrl}/api/logs`);
+    const body = await response.json();
+
+    assert.equal(response.status, 200);
+    assert.equal(body.logs.length, 100);
+    assert.ok(body.logs[0].includes("run-20") || body.logs[0].includes("Bot configuration saved."));
+  } finally {
+    await ctx.close();
+  }
+});
+
+test("POST /api/logs/clear removes all existing log lines", async () => {
+  const ctx = await startTestServer();
+
+  try {
+    await fetch(`${ctx.baseUrl}/api/config`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ displayName: "before-clear" }),
+    });
+
+    const clearResponse = await fetch(`${ctx.baseUrl}/api/logs/clear`, { method: "POST" });
+    const clearBody = await clearResponse.json();
+
+    assert.equal(clearResponse.status, 200);
+    assert.equal(clearBody.ok, true);
+
+    const response = await fetch(`${ctx.baseUrl}/api/logs`);
+    const body = await response.json();
+    assert.deepEqual(body.logs, []);
   } finally {
     await ctx.close();
   }

@@ -1,4 +1,4 @@
-import { createLogStreamController, createToastController, highlightCurrentNav } from "/shared.js";
+import { api, createLogStreamController, createToastController, highlightCurrentNav } from "/shared.js";
 import { summarizeOciFeedback } from "/oci-feedback.js";
 
 const toast = createToastController(document.querySelector("#toast"));
@@ -13,6 +13,18 @@ const logModeValue = document.querySelector("#logModeValue");
 const friendlyLogCard = document.querySelector("#friendlyLogCard");
 const friendlyLogTitle = document.querySelector("#friendlyLogTitle");
 const friendlyLogMessage = document.querySelector("#friendlyLogMessage");
+const clearLogsBtn = document.querySelector("#clearLogsBtn");
+
+clearLogsBtn.addEventListener("click", async () => {
+  try {
+    await api("/api/logs/clear", { method: "POST" });
+    logsView.textContent = "暂无日志";
+    renderSummary({ lines: [], mode: "live" });
+    toast.show("日志已清理");
+  } catch (error) {
+    toast.show(error.message, true);
+  }
+});
 
 function formatLogTime(line) {
   const match = String(line ?? "").match(/^\[([^\]]+)\]/);

@@ -3,11 +3,13 @@ import { api, createToastController, getFormJson, highlightCurrentNav } from "/s
 
 const ociForm = document.querySelector("#ociForm");
 const botForm = document.querySelector("#botForm");
+const notificationForm = document.querySelector("#notificationForm");
 const tfImportZone = document.querySelector("#tfImportZone");
 const tfFileInput = document.querySelector("#tfFileInput");
 const toast = createToastController(document.querySelector("#toast"));
 
 document.querySelector("#validateOciBtn").addEventListener("click", () => runAction(validateOci));
+document.querySelector("#testFeishuBtn").addEventListener("click", () => runAction(testFeishuNotification));
 ociForm.addEventListener("submit", (event) => {
   event.preventDefault();
   runAction(saveOciConfig);
@@ -15,6 +17,10 @@ ociForm.addEventListener("submit", (event) => {
 botForm.addEventListener("submit", (event) => {
   event.preventDefault();
   runAction(saveBotConfig);
+});
+notificationForm.addEventListener("submit", (event) => {
+  event.preventDefault();
+  runAction(saveNotificationConfig);
 });
 tfImportZone.addEventListener("click", () => tfFileInput.click());
 tfImportZone.addEventListener("keydown", (event) => {
@@ -92,6 +98,24 @@ async function saveBotConfig() {
   toast.show("抢机配置已保存");
 }
 
+async function saveNotificationConfig() {
+  const payload = getFormJson(notificationForm);
+  await api("/api/config", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+  toast.show("通知配置已保存");
+}
+
+async function testFeishuNotification() {
+  const webhookUrl = String(notificationForm.elements.namedItem("feishuWebhookUrl")?.value ?? "").trim();
+  await api("/api/notify/feishu/test", {
+    method: "POST",
+    body: JSON.stringify({ webhookUrl }),
+  });
+  toast.show("测试通知已发送");
+}
+
 async function importTerraformFile(file) {
   const text = await file.text();
   const parsed = parseTerraformBotConfig(text);
@@ -107,6 +131,7 @@ async function importTerraformFile(file) {
     availabilityDomain: "Availability Domain",
     imageId: "Image ID",
     displayName: "Display Name",
+    feishuWebhookUrl: "Feishu Webhook",
     sshAuthorizedKeys: "SSH Authorized Keys",
     ocpus: "OCPUs",
     memory: "Memory",
@@ -122,6 +147,12 @@ async function refreshConfig() {
     const field = botForm.elements.namedItem(key);
     if (field) {
       field.value = value ?? "";
+      continue;
+    }
+
+    const notificationField = notificationForm.elements.namedItem(key);
+    if (notificationField) {
+      notificationField.value = value ?? "";
     }
   }
 }

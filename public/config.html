@@ -87,6 +87,17 @@ openssl rsa -pubout -in oci_api_key.pem -out oci_api_key_public.pem</pre>
         </form>
       </section>
 
+      <section class="panel">
+        <h2>通知配置</h2>
+        <form id="notificationForm" class="form-grid">
+          <label class="full"><span>Feishu Webhook</span><input name="feishuWebhookUrl" placeholder="https://open.feishu.cn/open-apis/bot/v2/hook/..." /></label>
+          <div class="actions full">
+            <button type="submit">保存通知配置</button>
+            <button type="button" id="testFeishuBtn" class="secondary">测试飞书通知</button>
+          </div>
+        </form>
+      </section>
+
       <section class="toast" id="toast"></section>
     </main>
     <script src="/config.js" type="module"></script>

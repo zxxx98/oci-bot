@@ -10,6 +10,7 @@ const DEFAULT_BOT_CONFIG = {
   availabilityDomain: "",
   imageId: "",
   displayName: "Oracle-ARM-Bot",
+  feishuWebhookUrl: "",
   sshAuthorizedKeys: "",
   ocpus: 2,
   memory: 12,
@@ -124,14 +125,19 @@ class Logger {
   async append(message) {
     const line = `[${this.now().toISOString()}] ${message}`;
     this.lines.push(line);
-    if (this.lines.length > 500) {
-      this.lines = this.lines.slice(-500);
+    if (this.lines.length > 100) {
+      this.lines = this.lines.slice(-100);
     }
     await writeFile(this.logPath, `${this.lines.join("\n")}\n`, "utf8");
     for (const subscriber of this.subscribers) {
       subscriber(line);
     }
     return line;
+  }
+
+  async clear() {
+    this.lines = [];
+    await writeFile(this.logPath, "", "utf8");
   }
 
   getLines() {
@@ -269,17 +275,65 @@ function defaultCommandRunner(command, args, options = {}) {
   });
 }
 
+async function defaultNotificationSender({ webhookUrl, text }) {
+  if (!webhookUrl) {
+    return { skipped: true };
+  }
+
+  const response = await fetch(webhookUrl, {
+    method: "POST",
+    headers: {
+      "content-type": "application/json; charset=utf-8",
+    },
+    body: JSON.stringify({
+      msg_type: "text",
+      content: {
+        text,
+      },
+    }),
+  });
+
+  if (!response.ok) {
+    const details = await response.text().catch(() => "");
+    throw new Error(`Feishu webhook failed: ${response.status} ${details}`.trim());
+  }
+
+  return { ok: true };
+}
+
 class BotJobRunner {
-  constructor({ configStore, statusStore, logger, commandRunner, dataDir, now = () => new Date() }) {
+  constructor({ configStore, statusStore, logger, commandRunner, notificationSender, dataDir, now = () => new Date() }) {
     this.configStore = configStore;
     this.statusStore = statusStore;
     this.logger = logger;
     this.commandRunner = commandRunner;
+    this.notificationSender = notificationSender;
     this.dataDir = dataDir;
     this.now = now;
     this.running = false;
     this.abortRequested = false;
     this.currentPromise = null;
+  }
+
+  async notifySuccess(config, output) {
+    if (!String(config.feishuWebhookUrl ?? "").trim()) {
+      return;
+    }
+
+    const text = [
+      "OCI ARM 抢机成功",
+      `实例名称: ${config.displayName || "Oracle-ARM-Bot"}`,
+      `区域/可用域: ${config.availabilityDomain}`,
+      `镜像: ${config.imageId}`,
+      `时间: ${this.now().toISOString()}`,
+      "",
+      `返回摘要: ${output.slice(0, 500)}`,
+    ].join("\n");
+
+    await this.notificationSender({
+      webhookUrl: config.feishuWebhookUrl,
+      text,
+    });
   }
 
   getStatus() {
@@ -447,6 +501,12 @@ class BotJobRunner {
           nextRetryAt: null,
         });
         await this.logger.append(`SUCCESS: ${classified.message}`);
+        try {
+          await this.notifySuccess(config, output);
+          await this.logger.append("Feishu success notification sent.");
+        } catch (error) {
+          await this.logger.append(`Feishu notification failed: ${error.message}`);
+        }
         return;
       }
 
@@ -523,12 +583,12 @@ function getContentType(fileName) {
   }
 }
 
-export function createApp({ dataDir = path.resolve(process.cwd(), "data"), ociDir = "/root/.oci", commandRunner = defaultCommandRunner, now = () => new Date() } = {}) {
+export function createApp({ dataDir = path.resolve(process.cwd(), "data"), ociDir = "/root/.oci", commandRunner = defaultCommandRunner, notificationSender = defaultNotificationSender, now = () => new Date() } = {}) {
   const configStore = new JsonFileStore(path.join(dataDir, "config.json"), DEFAULT_BOT_CONFIG);
   const statusStore = new JsonFileStore(path.join(dataDir, "job-state.json"), DEFAULT_STATUS);
   const logger = new Logger(path.join(dataDir, "logs", "app.log"), now);
   const ociConfigStore = new OciConfigStore(ociDir);
-  const jobRunner = new BotJobRunner({ configStore, statusStore, logger, commandRunner, dataDir, now });
+  const jobRunner = new BotJobRunner({ configStore, statusStore, logger, commandRunner, notificationSender, dataDir, now });
 
   const ready = Promise.all([
     configStore.init(),
@@ -593,6 +653,21 @@ export function createApp({ dataDir = path.resolve(process.cwd(), "data"), ociDi
         return createJsonResponse(res, 400, { ok: false, output });
       }
 
+      if (req.method === "POST" && url.pathname === "/api/notify/feishu/test") {
+        const body = await readRequestBody(req);
+        const webhookUrl = String(body.webhookUrl ?? "").trim();
+        if (!webhookUrl) {
+          return createJsonResponse(res, 400, { ok: false, message: "Missing Feishu webhook URL" });
+        }
+
+        await notificationSender({
+          webhookUrl,
+          text: `Oracle ARM Bot 测试通知\n时间: ${now().toISOString()}\n这是一条用于校验飞书 Webhook 配置的测试消息。`,
+        });
+        await logger.append("Feishu test notification sent.");
+        return createJsonResponse(res, 200, { ok: true });
+      }
+
       if (req.method === "POST" && url.pathname === "/api/job/start") {
         const result = await jobRunner.start();
         if (!result.accepted) {
@@ -612,6 +687,11 @@ export function createApp({ dataDir = path.resolve(process.cwd(), "data"), ociDi
 
       if (req.method === "GET" && url.pathname === "/api/logs") {
         return createJsonResponse(res, 200, { logs: logger.getLines() });
+      }
+
+      if (req.method === "POST" && url.pathname === "/api/logs/clear") {
+        await logger.clear();
+        return createJsonResponse(res, 200, { ok: true });
       }
 
       if (req.method === "GET" && url.pathname === "/api/logs/stream") {
