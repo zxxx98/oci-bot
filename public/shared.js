@@ -64,6 +64,7 @@ export function createLogStreamController({ logsView, statusElement, toast, onUp
     eventSource: null,
     replayPending: false,
     mode: "connecting",
+    stopCurrent: null,
   };
 
   function setStatus(mode, message) {
@@ -105,14 +106,22 @@ export function createLogStreamController({ logsView, statusElement, toast, onUp
     }, 3000);
   }
 
+  function stop() {
+    state.stopCurrent?.();
+    state.stopCurrent = null;
+    state.eventSource = null;
+  }
+
   function startStream() {
+    stop();
+
     if (!window.EventSource) {
-      return startPollingLogs();
+      state.stopCurrent = startPollingLogs();
+      return state.stopCurrent;
     }
 
-    state.eventSource?.close();
     setStatus("reconnecting", "实时日志连接中");
-    const eventSource = new EventSource("/api/logs/stream");
+    const eventSource = new window.EventSource("/api/logs/stream");
     state.eventSource = eventSource;
 
     eventSource.onopen = () => {
@@ -132,13 +141,19 @@ export function createLogStreamController({ logsView, statusElement, toast, onUp
       setStatus("reconnecting", "实时日志重连中");
     };
 
-    return () => {
+    state.stopCurrent = () => {
       eventSource.close();
+      if (state.eventSource === eventSource) {
+        state.eventSource = null;
+      }
     };
+
+    return state.stopCurrent;
   }
 
   return {
     refreshLogs,
     startStream,
+    stop,
   };
 }

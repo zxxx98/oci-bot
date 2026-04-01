@@ -21,6 +21,8 @@ const toast = createToastController(document.querySelector("#toast"));
 
 let latestStatus = null;
 let syncInFlight = false;
+let stopDerivedTimer = null;
+let stopStatusTimer = null;
 
 actionBtn.addEventListener("click", () => runAction(toggleJob));
 
@@ -231,25 +233,53 @@ function refreshDerivedTime() {
 async function bootstrap() {
   highlightCurrentNav();
   await refreshStatus();
-  startPolling(() => {
-    refreshDerivedTime();
-    return Promise.resolve();
-  }, 1000);
-  startPolling(async () => {
-    try {
-      await refreshStatus();
-    } catch (error) {
-      toast.show(error.message, true);
+
+  const startTimers = () => {
+    if (!stopDerivedTimer) {
+      stopDerivedTimer = startPolling(() => {
+        refreshDerivedTime();
+        return Promise.resolve();
+      }, 1000);
     }
-  }, 10000);
+
+    if (stopStatusTimer) {
+      return;
+    }
+
+    stopStatusTimer = startPolling(async () => {
+      try {
+        await refreshStatus();
+      } catch (error) {
+        toast.show(error.message, true);
+      }
+    }, 10000);
+  };
+
+  const stopTimers = () => {
+    stopDerivedTimer?.();
+    stopStatusTimer?.();
+    stopDerivedTimer = null;
+    stopStatusTimer = null;
+  };
+
+  startTimers();
 
   const refreshOnReturn = () => {
     if (document.visibilityState && document.visibilityState !== "visible") {
+      stopTimers();
       return;
     }
-    refreshStatus().catch((error) => toast.show(error.message, true));
+
+    startTimers();
+    try {
+      refreshStatus().catch((error) => toast.show(error.message, true));
+    } catch (error) {
+      toast.show(error.message, true);
+    }
   };
 
+  window.addEventListener("beforeunload", stopTimers);
+  window.addEventListener("pagehide", stopTimers);
   window.addEventListener("focus", refreshOnReturn);
   window.addEventListener("pageshow", refreshOnReturn);
   document.addEventListener("visibilitychange", refreshOnReturn);

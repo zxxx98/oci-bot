@@ -80,5 +80,26 @@ const logs = createLogStreamController({
   onUpdate: renderSummary,
 });
 
+function handlePageInactive() {
+  logs.stop();
+}
+
+function handlePageActive() {
+  if (document.visibilityState && document.visibilityState !== "visible") {
+    return;
+  }
+  logs.startStream();
+}
+
 highlightCurrentNav();
-logs.startStream();
+handlePageActive();
+window.addEventListener("beforeunload", handlePageInactive);
+window.addEventListener("pagehide", handlePageInactive);
+window.addEventListener("pageshow", handlePageActive);
+document.addEventListener("visibilitychange", () => {
+  if (document.visibilityState === "hidden") {
+    handlePageInactive();
+    return;
+  }
+  handlePageActive();
+});

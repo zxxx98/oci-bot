@@ -732,3 +732,37 @@ test("GET /api/logs/stream expires long-lived subscribers", async () => {
     await ctx.close();
   }
 });
+
+test("createLogStreamController stop closes the active EventSource", async () => {
+  global.window = global.window || {};
+
+  let closeCount = 0;
+  class FakeEventSource {
+    constructor() {
+      this.onopen = null;
+      this.onmessage = null;
+      this.onerror = null;
+    }
+
+    close() {
+      closeCount += 1;
+    }
+  }
+
+  global.window.EventSource = FakeEventSource;
+  global.EventSource = FakeEventSource;
+
+  const { createLogStreamController } = await import("../public/shared.js");
+  const controller = createLogStreamController({
+    logsView: { textContent: "" },
+    statusElement: { textContent: "", className: "" },
+    toast: { show() {} },
+  });
+
+  controller.startStream();
+  controller.stop();
+
+  assert.equal(closeCount, 1);
+
+  delete global.EventSource;
+});
