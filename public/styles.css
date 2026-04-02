@@ -391,6 +391,8 @@ button.danger { background: var(--danger); }
 }
 .viewer-large {
   min-height: 420px;
+  height: min(62vh, 720px);
+  max-height: min(62vh, 720px);
 }
 .stream-indicator {
   display: inline-flex;

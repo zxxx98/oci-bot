@@ -684,12 +684,15 @@ export function createApp({
   now = () => new Date(),
   sseHeartbeatMs = 15000,
   sseClientTtlMs = 15 * 60 * 1000,
+  keepAliveTimeoutMs = 1000,
+  headersTimeoutMs = 2000,
 } = {}) {
   const configStore = new JsonFileStore(path.join(dataDir, "config.json"), DEFAULT_BOT_CONFIG);
   const statusStore = new JsonFileStore(path.join(dataDir, "job-state.json"), DEFAULT_STATUS);
   const logger = new Logger(path.join(dataDir, "logs", "app.log"), now);
   const ociConfigStore = new OciConfigStore(ociDir);
   const jobRunner = new BotJobRunner({ configStore, statusStore, logger, commandRunner, notificationSender, dataDir, now });
+  const sockets = new Set();
 
   const ready = Promise.all([
     configStore.init(),
@@ -784,6 +787,26 @@ export function createApp({
 
       if (req.method === "GET" && url.pathname === "/api/job/status") {
         return createJsonResponse(res, 200, { status: jobRunner.getStatus() });
+      }
+
+      if (req.method === "GET" && url.pathname === "/api/debug/runtime") {
+        const memory = process.memoryUsage();
+        return createJsonResponse(res, 200, {
+          runtime: {
+            memory: {
+              rss: memory.rss,
+              heapTotal: memory.heapTotal,
+              heapUsed: memory.heapUsed,
+              external: memory.external,
+              arrayBuffers: memory.arrayBuffers,
+            },
+            connections: {
+              socketCount: sockets.size,
+              subscriberCount: logger.getSubscriberCount(),
+            },
+            uptimeSeconds: process.uptime(),
+          },
+        });
       }
 
       if (req.method === "GET" && url.pathname === "/api/logs") {
@@ -887,6 +910,16 @@ export function createApp({
       return createJsonResponse(res, 500, { error: error.message });
     }
   });
+
+  server.on("connection", (socket) => {
+    sockets.add(socket);
+    socket.on("close", () => {
+      sockets.delete(socket);
+    });
+  });
+
+  server.keepAliveTimeout = keepAliveTimeoutMs;
+  server.headersTimeout = headersTimeoutMs;
 
   return {
     ready,

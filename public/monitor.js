@@ -74,6 +74,18 @@ function summarizeText(value, fallback) {
   return text.length > 140 ? `${text.slice(0, 140)}...` : text;
 }
 
+function getCurrentResultText(status, feedback) {
+  if (status.phase === "idle") {
+    return "尚未开始任务";
+  }
+
+  if (status.phase === "stopped") {
+    return "任务已手动停止";
+  }
+
+  return `${feedback.title}：${feedback.message}`;
+}
+
 function getPhaseMeta(status) {
   switch (status.phase) {
     case "success":
@@ -169,16 +181,17 @@ function renderStatus(status) {
     runtimeNote.textContent = "任务尚未启动";
   }
 
-  lastAttemptValue.textContent = formatDateTime(status.lastAttemptAt);
-  lastResultValue.textContent = summarizeText(status.lastResult, "暂无结果");
-  lastErrorValue.textContent = summarizeText(status.lastError, "暂无错误");
-
   const rawFeedback = status.lastError || status.lastResult;
   const feedback = summarizeOciFeedback(rawFeedback);
+  lastAttemptValue.textContent = formatDateTime(status.lastAttemptAt);
+  lastResultValue.textContent = summarizeText(getCurrentResultText(status, feedback), "暂无结果");
+  lastErrorValue.textContent = status.phase === "error"
+    ? "详细报错请前往日志面板查看"
+    : summarizeText(meta.message, "暂无说明");
   feedbackCard.className = `panel feedback-card feedback-card-${feedback.level}`;
   feedbackTitle.textContent = feedback.title;
   feedbackMessage.textContent = feedback.message;
-  feedbackRawView.textContent = rawFeedback || "暂无原始详情";
+  feedbackRawView.textContent = getCurrentResultText(status, feedback);
 }
 
 async function refreshStatus() {

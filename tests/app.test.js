@@ -230,6 +230,20 @@ test("summarizeOciFeedback turns capacity errors into friendly guidance", async 
   assert.match(summary.message, /自动重试/);
 });
 
+test("summarizeOciFeedback keeps generic errors user-facing instead of exposing raw payloads", async () => {
+  const { summarizeOciFeedback } = await import("../public/oci-feedback.js");
+  const summary = summarizeOciFeedback(`ServiceError:
+{
+  "code": "InternalError",
+  "message": "Request failed with request id abcdef and verbose backend trace",
+  "status": 500
+}`);
+
+  assert.equal(summary.level, "error");
+  assert.match(summary.title, /OCI 返回异常/);
+  assert.doesNotMatch(summary.message, /abcdef|verbose backend trace/);
+});
+
 test("POST /api/oci/config writes OCI config and private key", async () => {
   const ctx = await startTestServer();
 
@@ -568,6 +582,23 @@ test("GET /api/logs returns accumulated log lines", async () => {
     assert.equal(response.status, 200);
     assert.ok(Array.isArray(body.logs));
     assert.ok(body.logs.some((line) => line.includes("Out of Stock") || line.includes("Requesting ARM Instance")));
+  } finally {
+    await ctx.close();
+  }
+});
+
+test("GET /api/debug/runtime exposes memory and connection metrics", async () => {
+  const ctx = await startTestServer();
+
+  try {
+    const response = await fetch(`${ctx.baseUrl}/api/debug/runtime`);
+    const body = await response.json();
+
+    assert.equal(response.status, 200);
+    assert.equal(typeof body.runtime.memory.rss, "number");
+    assert.equal(typeof body.runtime.memory.heapUsed, "number");
+    assert.equal(typeof body.runtime.connections.socketCount, "number");
+    assert.equal(typeof body.runtime.connections.subscriberCount, "number");
   } finally {
     await ctx.close();
   }
